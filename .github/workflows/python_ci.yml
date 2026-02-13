@@ -14,7 +14,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.13"
 
       - name: Install ruff
         run: pip install ruff
@@ -33,24 +33,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux
-          - os: ubuntu-latest
-            python-version: "3.11"
-            cibw-build: "cp311-manylinux*"
-          - os: ubuntu-latest
-            python-version: "3.12"
-            cibw-build: "cp312-manylinux*"
+          # Linux - manylinux only
           - os: ubuntu-latest
             python-version: "3.13"
             cibw-build: "cp313-manylinux*"
-          # macOS
-          - os: macos-latest
-            python-version: "3.11"
-            cibw-build: "cp311-macosx*"
-          # Windows
-          - os: windows-latest
-            python-version: "3.11"
-            cibw-build: "cp311-win_amd64"
 
     steps:
       - uses: actions/checkout@v4
@@ -65,16 +51,9 @@ jobs:
         env:
           CIBW_BUILD: ${{ matrix.cibw-build }}
           CIBW_ARCHS_LINUX: x86_64
-          CIBW_ARCHS_MACOS: x86_64 arm64
-          CIBW_ARCHS_WINDOWS: AMD64
           CIBW_BEFORE_ALL_LINUX: |
             yum install -y openblas-devel lapack-devel pkgconfig || \
             (apt-get update && apt-get install -y libopenblas-dev liblapack-dev pkg-config)
           CIBW_ENVIRONMENT_LINUX: PKG_CONFIG_PATH="/usr/lib64/pkgconfig:/usr/lib/pkgconfig"
-          CIBW_BEFORE_ALL_MACOS: brew install openblas
-          CIBW_BEFORE_ALL_WINDOWS: vcpkg install openblas:x64-windows-release lapack:x64-windows-release
-          CIBW_BEFORE_BUILD_WINDOWS: pip install delvewheel
-          CIBW_ENVIRONMENT_WINDOWS: CMAKE_ARGS="-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows-release"
-          CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: delvewheel repair -w {dest_dir} {wheel} --add-path C:/vcpkg/installed/x64-windows-release/bin
           CIBW_TEST_REQUIRES: pytest numpy
           CIBW_TEST_COMMAND: pytest {project}/python/tests -v --tb=short

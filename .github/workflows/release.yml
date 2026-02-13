@@ -5,20 +5,6 @@ on:
     tags:
       - 'v*.*.*'  # Trigger on version tags like v1.0.0, v0.1.2, etc.
   workflow_dispatch:  # Allow manual triggering
-    inputs:
-      platforms:
-        description: 'Platforms to build for'
-        required: true
-        default: 'all'
-        type: choice
-        options:
-          - all
-          - ubuntu-latest
-          - windows-latest
-          - macos-latest
-          - ubuntu-windows
-          - ubuntu-macos
-          - windows-macos
 
 jobs:
   setup:
@@ -29,34 +15,8 @@ jobs:
     steps:
       - id: set-matrix
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            case "${{ github.event.inputs.platforms }}" in
-              "ubuntu-latest")
-                echo 'matrix=["ubuntu-latest"]' >> $GITHUB_OUTPUT
-                ;;
-              "windows-latest")
-                echo 'matrix=["windows-latest"]' >> $GITHUB_OUTPUT
-                ;;
-              "macos-latest")
-                echo 'matrix=["macos-latest"]' >> $GITHUB_OUTPUT
-                ;;
-              "ubuntu-windows")
-                echo 'matrix=["ubuntu-latest","windows-latest"]' >> $GITHUB_OUTPUT
-                ;;
-              "ubuntu-macos")
-                echo 'matrix=["ubuntu-latest","macos-latest"]' >> $GITHUB_OUTPUT
-                ;;
-              "windows-macos")
-                echo 'matrix=["windows-latest","macos-latest"]' >> $GITHUB_OUTPUT
-                ;;
-              *)
-                echo 'matrix=["ubuntu-latest","windows-latest","macos-latest"]' >> $GITHUB_OUTPUT
-                ;;
-            esac
-          else
-            # Default for automatic triggers (tags, branches)
-            echo 'matrix=["ubuntu-latest","windows-latest","macos-latest"]' >> $GITHUB_OUTPUT
-          fi
+          # Only build for ubuntu-latest (manylinux)
+          echo 'matrix=["ubuntu-latest"]' >> $GITHUB_OUTPUT
 
   build_wheels:
     name: Build wheels on ${{ matrix.os }}
@@ -76,7 +36,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.13'
 
       - name: Install cibuildwheel
         run: python -m pip install cibuildwheel
@@ -84,27 +44,18 @@ jobs:
       - name: Build wheels
         run: python -m cibuildwheel python --output-dir wheelhouse
         env:
-          # Configure which Python versions to build for
-          CIBW_BUILD: cp310-* cp311-* cp312-* cp313-*
-          # Skip 32-bit builds and musllinux
+          # Configure which Python versions to build for - Only Python 3.13
+          CIBW_BUILD: cp313-*
+          # Skip 32-bit builds and musllinux - only build manylinux
           CIBW_SKIP: "*-win32 *-manylinux_i686 *-musllinux*"
           
           # Install system dependencies for BLAS/LAPACK
           # Linux: Install OpenBLAS and LAPACK
           CIBW_BEFORE_BUILD_LINUX: yum install -y openblas-devel lapack-devel
           
-          # macOS: Install OpenBLAS via brew
-          CIBW_BEFORE_BUILD_MACOS: brew install openblas || true
-          
-          # Windows: Install NumPy (which provides OpenBLAS via our CMake fix)
-          CIBW_BEFORE_BUILD_WINDOWS: pip install numpy
-          
           # Run tests after building
           CIBW_TEST_REQUIRES: pytest numpy
           CIBW_TEST_COMMAND: "pytest {project}/python/tests"
-          
-          # macOS: Build for both x86_64 and arm64
-          CIBW_ARCHS_MACOS: "x86_64 arm64"
           
           # Linux: Use manylinux2014 for broad compatibility
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
@@ -129,7 +80,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.13'
 
       - name: Install build
         run: python -m pip install build
