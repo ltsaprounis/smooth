@@ -73,19 +73,28 @@ errors. With `select=TRUE` the orders are chosen by IC.
 
 ## Interpreting the main outputs
 
-### Smoothing / persistence parameters (`alpha`, `beta`, `gamma`, `phi`)
+### Smoothing / persistence parameters (`alpha`, `beta`, `gamma`, `phi`, `delta`)
 The heart of an ETS explanation. Each is on `[0,1]`:
 - **α (level)** — how fast the level tracks new data. Near 0 = stable/slow,
   near 1 = highly reactive (almost a random walk).
 - **β (trend)** — how fast the slope updates. Constraint `β ≤ α`.
-- **γ (seasonal)** — how fast the seasonal profile updates. Constraint
-  `γ ≤ 1 − α`. One γ per seasonal lag for multiple seasonality.
+- **γ_i (seasonal)** — how fast each seasonal profile updates. **One γ per
+  seasonal lag in `lags=`**, so `lags=c(1,7,12)` (R) / `lags=[1,7,12]` (Python)
+  fits both **γ_1** (weekly) and **γ_2** (annual); the fitted model reports them
+  as `gamma1`, `gamma2`, …. Constraint `γ_i ≤ 1 − α` per component.
 - **φ (damping)** — `φ < 1` flattens the trend; `φ = 1` is undamped.
+- **δ_i (regressor persistence)** — only when `regressors="adapt"`. One δ per
+  regressor column, reported as `delta1`, `delta2`, … Same `[0,1]` range as
+  the ETS smoothing parameters (R `utils-adam.R:1473-1480`; Python
+  `cost_functions.CF` under `bounds="usual"`), so δ_i near 0 means an almost-
+  static regressor coefficient, δ_i near 1 an aggressively-tracking one.
 
 Translate values, e.g. "α=0.08 → the level barely reacts to noise (smooth,
-stable series); β≈0 → an essentially fixed slope." Parameters are estimated by
-maximum likelihood (C++ optimiser in R; Python core), subject to the constraints
-above (violations are penalised, not allowed).
+stable series); β≈0 → an essentially fixed slope; γ_1=0.4 on the weekly lag
+vs γ_2=0.02 on the annual lag → the weekly pattern is being re-learned every
+few weeks but the annual shape is essentially locked in." Parameters are
+estimated by maximum likelihood (C++ optimiser in R; Python core), subject to
+the constraints above (violations are penalised, not allowed).
 
 ### Forecasts and prediction intervals
 `forecast(model, h=)` (R) / `model.predict(h=)` (Python) give point forecasts
@@ -111,16 +120,33 @@ IC won (or were combined under `C`).
 
 ### Components / states and residuals
 ADAM decomposes the series into level, trend, seasonal (and ARIMA/regression)
-states — the states plot shows how each evolves. For diagnostics, read the
-residuals for remaining autocorrelation or heteroscedasticity; a good model
-leaves approximately unstructured residuals consistent with the chosen
-distribution.
+states — the states plot shows how each evolves. **`plot(model, 12)`** (R) /
+**`model.plot(12)`** (Python) renders the full state decomposition and
+automatically expands to include:
+- **one panel per seasonal lag** when `lags=` has multiple entries — separate
+  γ_1, γ_2, … series so you can see, e.g., the weekly pattern vs the annual
+  pattern side-by-side;
+- **one panel per regressor** when explanatory variables are attached —
+  showing the fitted coefficient trajectory (constant under `regressors="use"`
+  / `"select"`, evolving under `regressors="adapt"`).
+
+Point users to that specific plot when they're trying to see whether an
+individual regressor coefficient or a specific seasonal profile is stable.
+For diagnostics, read the residuals for remaining autocorrelation or
+heteroscedasticity; a good model leaves approximately unstructured residuals
+consistent with the chosen distribution.
 
 ### Holdout accuracy
 When a holdout is used, accuracy measures (MAE, RMSE, MASE/RMSSE vs naive, and
 percentage/relative measures) come from **greybox** — see the
-[explain-greybox skill] in that repo for how to read each. Prefer scale-free
-measures (MASE, rMAE) to compare across series.
+[explain-greybox skill] in that repo for how to read each. **Prefer RMSE
+(single series) / RMSSE (cross-series)** as the primary measure — squared-error
+losses match the ADAM likelihood most models are fitted under, so they align
+with what the optimiser was actually minimising. Use **MAE / MASE** as a
+back-up sanity check for outlier-driven series or when comparing against a
+Laplace-loss / `dlaplace` fit. Percentage / relative measures (MPE, MAPE, sMAPE,
+rMAE) are third-line — informative for reporting but skewed by near-zero
+actuals.
 
 ### Explanatory variables (regressors) — ETSX / ARIMAX / oETSX
 Any of the models below can be extended with external regressors, turning
@@ -147,19 +173,24 @@ include an intercept column — the level state acts as the intercept.
 - `"select"` — IC-driven stepwise variable selection (via
   greybox `stepwise()`); explain by naming the surviving columns.
 - `"adapt"` — time-varying coefficients updated with an ETS-like smoothing
-  parameter. Useful when the regressor effect drifts (e.g. a promo effect
-  fading). **Python caveat:** the `[0,1]` bounds check on the regressor
-  persistence is not yet wired in
-  `python/src/smooth/adam_general/core/utils/cost_functions.py` (commented
-  branch near lines 498–515), so `regressors="adapt"` can give silently-wrong
-  fits vs R. Prefer `"use"` / `"select"` in Python until the guard lands.
+  parameter (one **δ_i** per regressor, `[0, 1]`). Useful when the regressor
+  effect drifts (e.g. a promo effect fading). Both R and Python enforce the
+  same `δ_i ∈ [0, 1]` box under `bounds="usual"` (R `utils-adam.R:1473-1480`;
+  Python `cost_functions.CF`), and the shared `smoothEigens`-based check
+  under `bounds="admissible"`.
 - `"integrate"` — GUM-only extra mode; adds an estimated transition matrix
   for the regressors.
 
-**Initial coefficients** can be seeded with `initial=list(xreg=c(...))` (R) /
-`initial={"xreg": [...]}` (Python); otherwise they are estimated via
-`greybox.ALM` on the in-sample data. All four initialisation modes
-(`"backcasting"`, `"optimal"`, `"two-stage"`, `"complete"`) work with
+**Initial values** can be seeded with a named list/dict combining any of the
+keys **`"level"`, `"trend"`, `"seasonal"`, `"xreg"`** (plus `"arma"` if the
+model has ARIMA components) — e.g. `initial=list(level=10, trend=0.2,
+seasonal=c(...), xreg=c(0.5,-0.3))` in R, or `initial={"level": 10.0,
+"trend": 0.2, "seasonal": [...], "xreg": [0.5, -0.3]}` in Python. Any key
+you supply is treated as **fixed** (not optimised); any key you omit is
+estimated from the data (regressor initials go through `greybox.ALM` on the
+in-sample slice). Keys can be mixed freely — fix the level while letting the
+optimiser do the rest, seed both trend and xreg, etc. All four initialisation
+modes (`"backcasting"`, `"optimal"`, `"two-stage"`, `"complete"`) work with
 regressors; only `"complete"` keeps them out of the parameter vector `B`.
 
 **Row-count rules (Python `fit`).** `len(X) == len(y)` is normal (last `h`
@@ -249,11 +280,12 @@ For intermittent series these model the **probability that demand occurs** (the
   returns the lowest-IC one directly. (In R this is `oes(..., occurrence="auto")`;
   in Python also reachable via `OM(occurrence="auto")`.)
 
-All three accept **explanatory variables** — R via `formula = ~ x1 + x2` and
-Python via `X` passed to `fit(y, X)` — with `regressors=` in `{"use","select",
-"adapt"}`. The model name then renders as `oETSX(MNN)[O]` / `oARIMAX(1,0,0)[O]`
-etc. See the "Explanatory variables (regressors)" section above for the modes,
-the Python `"adapt"` bounds-check caveat, and initialisation options; the
+All three accept **explanatory variables** — R via `formula = y ~ x1 + x2`
+(the LHS `y` is required — the occurrence formula is *not* a one-sided
+formula) and Python via `X` passed to `fit(y, X)` — with `regressors=` in
+`{"use","select","adapt"}`. The model name then renders as `oETSX(MNN)[O]` /
+`oARIMAX(1,0,0)[O]` etc. See the "Explanatory variables (regressors)" section
+above for the modes and initialisation options; the
 [Explanatory-Variables](../../smooth.wiki/Explanatory-Variables.md) wiki page
 has the full support matrix and worked examples for both `OM` and `OMG`.
 

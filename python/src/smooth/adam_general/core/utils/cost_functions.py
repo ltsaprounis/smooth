@@ -497,24 +497,16 @@ def CF(  # noqa: N802
             ):
                 return 1e300
 
-        # Not supporting regression model now
-        # if explanatory_checked['xreg_model'] and regressors == "adapt":
-        #     if any(adam_elements['vec_g'][components_dict['components_number_ets'] +
-        #                               components_dict['components_number_arima']:
-        #                               components_dict['components_number_ets'] +
-        #                               components_dict['components_number_arima'] +
-        #                               explanatory_checked['xreg_number']] > 1) or \
-        #        any(adam_elements['vec_g'][components_dict['components_number_ets'] +
-        #                               components_dict['components_number_arima']:
-        #                               components_dict['components_number_ets'] +
-        #                               components_dict['components_number_arima'] +
-        #                               explanatory_checked['xreg_number']] < 0):
-        #         return 1e100 * np.max(np.abs(adam_elements['vec_g']
-        #             [components_dict['components_number_ets'] +
-        #             components_dict['components_number_arima']:
-        #             components_dict['components_number_ets'] +
-        #             components_dict['components_number_arima'] +
-        #             explanatory_checked['xreg_number']] - 0.5))
+        if explanatory_checked["xreg_model"] and regressors == "adapt":
+            xreg_start = (
+                components_dict["components_number_ets"]
+                + components_dict["components_number_arima"]
+            )
+            deltas = adam_elements["vec_g"][
+                xreg_start : xreg_start + explanatory_checked["xreg_number"]
+            ]
+            if np.any(deltas > 1) or np.any(deltas < 0):
+                return 1e100 * np.max(np.abs(deltas - 0.5))
 
     elif bounds == "admissible":
         if arima_checked["arima_model"]:
