@@ -1,6 +1,6 @@
 ---
 name: explain-smooth
-description: Explain and interpret smooth (ADAM) state-space forecasting outputs in plain language, and pick the right model function — ADAM/AutoADAM, ES, CES/AutoCES, MSARIMA/AutoMSARIMA, SMA, the occurrence models OM/OMG/AutoOM for intermittent demand, msdecompose, and the sim_* simulators. Covers ETS model notation (the three-letter code and Z/X/Y/C/F selection placeholders), persistence/smoothing parameters (alpha, beta, gamma, phi) and their constraints, ARIMA orders, error distributions, information-criteria model selection, point forecasts and prediction intervals, component/state decomposition, and holdout accuracy. Use when the user asks what a fitted model means, how to read a summary/forecast/plot, why a model or distribution was selected, or which function fits their data — in either the R package or the Python port.
+description: Explain and interpret smooth (ADAM) state-space forecasting outputs in plain language, and pick the right model function — ADAM/AutoADAM, ES, CES/AutoCES, MSARIMA/AutoMSARIMA, SMA, the occurrence models OM/OMG/AutoOM for intermittent demand, msdecompose, and the sim_* simulators. Covers ETS model notation (the three-letter code and Z/X/Y/C/F selection placeholders), persistence/smoothing parameters (alpha, beta, gamma, phi) and their constraints, ARIMA orders, error distributions, information-criteria model selection, point forecasts and prediction intervals, component/state decomposition, holdout accuracy, and explanatory variables / external regressors (ETSX / ARIMAX / oETSX) — the `formula`/`xreg` (R) and `X` (Python) arguments, the `regressors` mode (`use`/`select`/`adapt`/`integrate`), and the Python intercept-drop and `adapt`-bounds caveats. Use when the user asks what a fitted model means, how to read a summary/forecast/plot, why a model or distribution was selected, how to add regressors, or which function fits their data — in either the R package or the Python port.
 ---
 
 # Explaining smooth (ADAM)
@@ -122,6 +122,54 @@ percentage/relative measures) come from **greybox** — see the
 [explain-greybox skill] in that repo for how to read each. Prefer scale-free
 measures (MASE, rMAE) to compare across series.
 
+### Explanatory variables (regressors) — ETSX / ARIMAX / oETSX
+Any of the models below can be extended with external regressors, turning
+`ADAM` into an ETSX / ARIMAX / mixed ETS+ARIMA+X model (`ES` → ETSX, `MSARIMA`
+→ ARIMAX, `OM` / `OMG` → oETSX / oARIMAX etc.). The regressors sit alongside
+the ETS/ARIMA states as their own component of the state vector; do **not**
+include an intercept column — the level state acts as the intercept.
+
+**How to pass them.**
+- R: `adam()` and the occurrence models (`om()`, `omg()`) take a
+  `formula = y ~ x1 + x2` (Wilkinson–Rogers syntax with `.`, `trend`, `-1`,
+  `log(x)`, `I(x^2)` etc.). `es()`, `ces()`, `ssarima()`, `msarima()` and
+  `gum()` take an `xreg` matrix or data-frame instead. At forecast time
+  supply future values via `newdata=` in `forecast()`.
+- Python: pass `X` (a `np.ndarray` of shape `(n, p)` or a `pd.DataFrame`
+  whose column names are preserved) to `fit(y, X)` and again to
+  `predict(h, X=X_future)` with shape `(h, p)`. There is no native formula
+  parser; for R-style formulas use `greybox.formula(...)` — it returns
+  `(y, X)` **with an `"(Intercept)"` column that must be dropped** before
+  `fit()`.
+
+**The `regressors=` mode** controls how the coefficients behave:
+- `"use"` (default) — fixed coefficients, all regressors kept.
+- `"select"` — IC-driven stepwise variable selection (via
+  greybox `stepwise()`); explain by naming the surviving columns.
+- `"adapt"` — time-varying coefficients updated with an ETS-like smoothing
+  parameter. Useful when the regressor effect drifts (e.g. a promo effect
+  fading). **Python caveat:** the `[0,1]` bounds check on the regressor
+  persistence is not yet wired in
+  `python/src/smooth/adam_general/core/utils/cost_functions.py` (commented
+  branch near lines 498–515), so `regressors="adapt"` can give silently-wrong
+  fits vs R. Prefer `"use"` / `"select"` in Python until the guard lands.
+- `"integrate"` — GUM-only extra mode; adds an estimated transition matrix
+  for the regressors.
+
+**Initial coefficients** can be seeded with `initial=list(xreg=c(...))` (R) /
+`initial={"xreg": [...]}` (Python); otherwise they are estimated via
+`greybox.ALM` on the in-sample data. All four initialisation modes
+(`"backcasting"`, `"optimal"`, `"two-stage"`, `"complete"`) work with
+regressors; only `"complete"` keeps them out of the parameter vector `B`.
+
+**Row-count rules (Python `fit`).** `len(X) == len(y)` is normal (last `h`
+rows serve as the holdout under `holdout=True`); `len(X) > len(y)` is
+silently trimmed; `len(X) < len(y)` repeats the last row and warns.
+
+Support matrix (which function accepts what) is on the
+[Explanatory-Variables](../../smooth.wiki/Explanatory-Variables.md) wiki
+page — refer users there for the authoritative table and worked examples.
+
 ## The model functions (what each one is, when to use it, how to read it)
 
 Quick picker:
@@ -194,10 +242,20 @@ For intermittent series these model the **probability that demand occurs** (the
 - **`OMG`** — the **general** occurrence model: two parallel ETS sub-models
   (odds-ratio `model_a` and inverse-odds-ratio `model_b`) combined, name
   `oETS[G](MNN)(MNN)`. Use when a single mechanism does not fit the on/off
-  pattern.
+  pattern. Each sub-model takes its own regressor spec via the `_a`/`_b`
+  suffix (R: `formulaA` / `formulaB`, `regressorsA` / `regressorsB`;
+  Python: `formula_a` / `formula_b`, `regressors_a` / `regressors_b`).
 - **`AutoOM`** — fits an `OM`/`OMG` for each requested `occurrence` type and
   returns the lowest-IC one directly. (In R this is `oes(..., occurrence="auto")`;
   in Python also reachable via `OM(occurrence="auto")`.)
+
+All three accept **explanatory variables** — R via `formula = ~ x1 + x2` and
+Python via `X` passed to `fit(y, X)` — with `regressors=` in `{"use","select",
+"adapt"}`. The model name then renders as `oETSX(MNN)[O]` / `oARIMAX(1,0,0)[O]`
+etc. See the "Explanatory variables (regressors)" section above for the modes,
+the Python `"adapt"` bounds-check caveat, and initialisation options; the
+[Explanatory-Variables](../../smooth.wiki/Explanatory-Variables.md) wiki page
+has the full support matrix and worked examples for both `OM` and `OMG`.
 
 ### `msdecompose` — multiple-seasonal decomposition
 Classical decomposition for series with one or more frequencies (`lags=[12]`,
@@ -225,7 +283,8 @@ forecasting an observed series.
 | Exponential smoothing | `es` | `R/es.R`, `R/adam-es.R` | `core/es.py` |
 | State-space ARIMA | `ssarima` | `R/ssarima.R`, `R/adam-ssarima.R` | `core/msarima.py` |
 | CES | `ces` | `R/ces.R`, `R/adam-ces.R` | `core/ces_model.py` |
-| Occurrence / intermittent | `oes` | `R/oes.R` | `core/om.py`, `core/omg.py`, `core/auto_om.py` |
+| Occurrence / intermittent | `OM` | `R/om.R`, `R/omg.R`, `R/om-oes.R` | `core/om.py`, `core/omg.py`, `core/auto_om.py` |
+| Explanatory variables (regressors) | `Explanatory-Variables` | `R/adam.R`, `R/adamGeneral.R` (`formula`, `xreg`) | `adam_general/core/adam.py`, `core/om.py`, `core/omg.py` (`X` arg to `.fit()`) |
 | Moving average | `sma` | `R/sma.R` | `core/sma.py` |
 | GUM (R-only fitting; sim only in Python) | `gum` | `R/gum.R`, `R/adam-gum.R` | `core/simulate/gum.py` (`sim_gum`) |
 | Simulation | `simulate` | `R/sim*.R` | `core/simulate/` |
